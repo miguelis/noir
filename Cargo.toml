@@ -228,6 +228,7 @@ rust-embed = "^8.7.2"
 petgraph = "^0.8.2"
 insta = "1.42.2"
 
+
 [profile.dev]
 # This is required to be able to run `cargo test` in acvm_js due to the `locals exceeds maximum` error.
 # See https://ritik-mishra.medium.com/resolving-the-wasm-pack-error-locals-exceed-maximum-ec3a9d96685b

@@ -44,6 +44,12 @@ impl<F: PrimeField> std::fmt::Debug for FieldElement<F> {
     }
 }
 
+impl<F: PrimeField> From<String> for FieldElement<F> {
+    fn from(s: String) -> FieldElement<F> {
+        FieldElement::try_from_str(&s).unwrap()
+    }
+}
+
 impl<F: PrimeField> From<i128> for FieldElement<F> {
     fn from(mut a: i128) -> FieldElement<F> {
         let mut negative = false;

@@ -12,8 +12,12 @@ use crate::{
 use acir_field::AcirField;
 pub use opcodes::Opcode;
 use thiserror::Error;
+use num_bigint::BigInt;
 
-use std::{io::prelude::*, num::ParseIntError, str::FromStr};
+
+ use serde_json::Value;
+ use core::num;
+use std::{collections::HashMap, fs::File, io::prelude::*, iter::FromFn, num::ParseIntError, str::FromStr};
 
 use base64::Engine;
 use flate2::Compression;
@@ -404,6 +408,233 @@ impl PublicInputs {
 
     pub fn contains(&self, index: usize) -> bool {
         self.0.contains(&Witness(index as u32))
+    }
+}
+
+
+impl<F: AcirField + From<String> > Circuit<F> {
+
+    pub fn read_assert_zero_constraints(&mut self, json_output : &Value) -> Result<(), std::io::Error> {
+
+        let inputs: Vec<u32> = serde_json::from_value(json_output["inputs"].clone()).unwrap();
+        let outputs: Vec<u32> = serde_json::from_value(json_output["outputs"].clone()).unwrap();
+        let constraints: Vec<Value> = serde_json::from_value(json_output["constraints"].clone()).unwrap();
+        let number_of_signals: u32 = serde_json::from_value(json_output["number_of_signals"].clone()).unwrap();
+
+        let mut opcodes = Vec::new();
+        for constraint in constraints {
+            let q_c = F::from(constraint["constant"].as_str().unwrap().to_string());
+            let mut mul_terms = Vec::new();
+            for mul in constraint["mul"].as_array().unwrap() {
+                let coeff = F::from(mul["coeff"].as_str().unwrap().to_string());
+                let witness1 = Witness(mul["witness1"].as_u64().unwrap() as u32);
+                let witness2 = Witness(mul["witness2"].as_u64().unwrap() as u32);
+                mul_terms.push((coeff, witness1, witness2));
+            }
+            let mut linear_combinations = Vec::new();
+            for linear in constraint["linear"].as_array().unwrap() {
+                let coeff = F::from(linear["coeff"].as_str().unwrap().to_string());
+                let witness = Witness(linear["witness"].as_u64().unwrap() as u32);
+                linear_combinations.push((coeff, witness));
+            }
+            let expr = Expression {
+                mul_terms,
+                linear_combinations,
+                q_c,
+            };
+            opcodes.push(Opcode::AssertZero(expr));
+        }
+
+        
+
+        //let opcodes2 : Vec<Opcode<F>> = self.opcodes.clone().into_iter().filter(|opcode| !matches!(opcode, Opcode::AssertZero(_))).collect();
+        let mut new_opcodes = Vec::new();
+        let mut index = 0; 
+        for opcode in &self.opcodes {
+            if let Opcode::AssertZero(_) = opcode {
+                new_opcodes.push(opcodes.get(index).unwrap().clone());
+                index += 1;
+            }
+            else {
+                new_opcodes.push(opcode.clone());
+            }
+        }
+
+        /*
+        println!("opcodes antes {:?}", self.opcodes.len());
+        println!("opcodes antes {:?}", self.opcodes);
+        new_opcodes.extend(opcodes2);
+        new_opcodes.extend(opcodes);
+        println!("opcodes leido {:?}", self.opcodes);*/
+        self.opcodes = new_opcodes;
+        self.current_witness_index = number_of_signals;
+        self.public_parameters = PublicInputs(BTreeSet::from_iter(inputs.into_iter().map(Witness)));
+        self.return_values = PublicInputs(BTreeSet::from_iter(outputs.into_iter().map(Witness)));
+
+        Ok(())
+    }
+
+    pub fn transform_to_r1cs(&mut self, new_id: &mut HashMap<(Witness, Witness), Witness>) -> std::io::Result<u32> {
+        let mut new_opcodes = Vec::new();
+        //let mut new_id : HashMap<(Witness, Witness), Witness> = HashMap::new();
+        for opcode in &self.opcodes {
+            match opcode {
+                Opcode::AssertZero(expr) => {
+                    if expr.mul_terms.len() <= 1 {
+                        new_opcodes.push(opcode.clone());
+                    } else {
+                        let mut new_linear_combinations = Vec::new();
+                        for (coef,witness1,witness2) in expr.mul_terms.clone() {
+                            if new_id.contains_key(&(witness1, witness2)) {
+                                let new_witness = new_id.get(&(witness1, witness2)).unwrap();
+                                new_linear_combinations.push((coef, new_witness.clone()));
+                            } else {
+                                let new_witness = Witness(self.current_witness_index);
+                                self.current_witness_index += 1;
+                                new_linear_combinations.push((coef, new_witness));
+                                new_id.insert((witness1, witness2), new_witness);
+                                let new_mul = Expression {
+                                    mul_terms: vec![(F::one(), witness1, witness2)],
+                                    linear_combinations: vec![(-F::one(), new_witness)],
+                                    q_c: F::zero(),
+                                };
+                                new_opcodes.push(Opcode::AssertZero(new_mul));
+                            }
+                        }
+                        new_linear_combinations.extend(expr.linear_combinations.clone());
+                        let new_expr = Expression {
+                            mul_terms: vec![],
+                            linear_combinations: new_linear_combinations,
+                            q_c: expr.q_c,
+                        };
+                        new_opcodes.push(Opcode::AssertZero(new_expr));
+                    }
+                }
+                _ => {
+                    new_opcodes.push(opcode.clone());
+                }
+            }
+        };
+
+        self.opcodes = new_opcodes;
+        Ok(self.current_witness_index)
+    }
+
+
+    pub fn write_assert_zero_constraints(circuit: &Circuit<F>) -> std::io::Result<Value> {
+        let mut constraints = vec![];
+        let mut inputs = vec![];
+        let mut outputs = vec![];
+        let mut btree_inputs = BTreeSet::new();
+        let mut btree_outputs = BTreeSet::new();
+        let mut forbidden_signals = BTreeSet::new();
+        for i in &circuit.public_parameters.0 {
+            btree_inputs.insert(i.witness_index());
+        }
+        for i in &circuit.private_parameters {
+            btree_inputs.insert(i.witness_index());
+        }
+        for i in &circuit.return_values.0 {
+            btree_outputs.insert(i.witness_index());
+        }
+        for i in btree_outputs {
+           // if !btree_inputs.contains(&i) {
+                outputs.push(i);
+            //}
+        }
+        for i in btree_inputs {
+            inputs.push(i);
+        }
+
+        for opcode in &circuit.opcodes {
+            match opcode {
+                Opcode::AssertZero(expr) => {
+                    let mut constraint = serde_json::json!({
+                        "mul": [], 
+                        "linear": [],
+                        "constant": expr.q_c.to_string(),
+                    });
+
+                    for i in &expr.mul_terms {
+                        constraint["mul"].as_array_mut().unwrap().push(serde_json::json!({
+                        "coeff": i.0.to_string(),
+                        "witness1": i.1.witness_index(),
+                        "witness2": i.2.witness_index(),
+                        }));
+                    }
+        
+                    for i in &expr.linear_combinations {
+                        constraint["linear"].as_array_mut().unwrap().push(serde_json::json!({
+                        "coeff": i.0.to_string(),
+                        "witness": i.1.witness_index(),
+                        }));
+                    }
+        
+                    constraints.push(constraint);
+                    }
+                Opcode::BlackBoxFuncCall(black_box_func_call) => {
+                    let ipt = black_box_func_call.get_input_witnesses();
+                    forbidden_signals.extend(ipt.iter().map(|w| w.witness_index()));
+                    let opt = black_box_func_call.get_outputs_vec();
+                    forbidden_signals.extend(opt.iter().map(|w| w.witness_index()));
+                },
+                Opcode::MemoryOp {  op, predicate, .. } => {
+                    for i in op.operation.get_witnesses() { forbidden_signals.insert(i.witness_index());}
+                    for i in op.index.get_witnesses() { forbidden_signals.insert(i.witness_index());}
+                    for i in op.value.get_witnesses() { forbidden_signals.insert(i.witness_index());}
+                    if predicate.is_some() {
+                        forbidden_signals.extend(predicate.as_ref().unwrap().get_witnesses().iter().map(|w| w.witness_index()));
+                    }
+                },
+                Opcode::MemoryInit {  init, .. } => {
+                    forbidden_signals.extend(init.iter().map(|w| w.witness_index()));
+                },
+                Opcode::BrilligCall { inputs, outputs, predicate, id  } => {
+                   for i in inputs {
+                        match i {
+                            brillig::BrilligInputs::Single(expression) => {
+                                forbidden_signals.extend(expression.get_witnesses().iter().map(|w| w.witness_index()));
+                            },
+                            brillig::BrilligInputs::Array(expressions) => {
+                                for e in expressions {
+                                    forbidden_signals.extend(e.get_witnesses().iter().map(|w| w.witness_index()));
+                                }
+                            },
+                            _ => {},
+                        }   
+                   }
+                   for o in outputs {
+                        match o {
+                             brillig::BrilligOutputs::Simple(w) => {
+                                  forbidden_signals.insert(w.witness_index());
+                             },
+                             brillig::BrilligOutputs::Array(w) => {
+                                forbidden_signals.extend(w.iter().map(|w| w.witness_index()));
+                             }
+                            }
+                    }
+                    if predicate.is_some() {
+                        forbidden_signals.extend(predicate.as_ref().unwrap().get_witnesses().iter().map(|w| w.witness_index()));
+                    }
+                },
+                Opcode::Call { inputs, outputs, predicate, .. } => {
+                    println!("Call opcode found during serialization");
+                    forbidden_signals.extend(inputs.iter().map(|w| w.witness_index()));
+                    forbidden_signals.extend(outputs.iter().map(|w| w.witness_index()));
+                    if predicate.is_some() {
+                        forbidden_signals.extend(predicate.as_ref().unwrap().get_witnesses().iter().map(|w| w.witness_index()));
+                    }
+                },
+            }
+        };
+
+        let json_output = serde_json::json!({
+            "inputs": inputs,
+            "outputs": outputs,
+            "constraints": constraints,
+            "number_of_signals": circuit.current_witness_index
+        });
+        Ok(json_output)
     }
 }
 

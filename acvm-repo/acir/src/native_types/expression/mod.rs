@@ -350,6 +350,28 @@ impl<F: AcirField> Expression<F> {
 
         width
     }
+    
+    pub fn get_witnesses(&self) -> Vec<Witness> {
+        let mut witnesses = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for (_, w1, w2) in &self.mul_terms {
+            if seen.insert(w1) {
+                witnesses.push(*w1);
+            }
+            if seen.insert(w2) {
+                witnesses.push(*w2);
+            }
+        }
+
+        for (_, w) in &self.linear_combinations {
+            if seen.insert(w) {
+                witnesses.push(*w);
+            }
+        }
+
+        witnesses
+    }
 }
 
 impl<F: AcirField> From<F> for Expression<F> {
@@ -357,6 +379,7 @@ impl<F: AcirField> From<F> for Expression<F> {
         Expression { q_c: constant, linear_combinations: Vec::new(), mul_terms: Vec::new() }
     }
 }
+
 
 impl<F: AcirField> From<Witness> for Expression<F> {
     /// Creates an Expression from a Witness.

@@ -54,5 +54,6 @@ fn transform_program_internal(
         .collect::<Vec<_>>();
 
     program.functions = optimized_functions;
+    program.write_program_to_json("acir_program.json");
     program
 }
