@@ -607,6 +607,8 @@ impl<F: AcirField + From<String> > Circuit<F> {
             inputs.push(i);
         }
 
+        let mut n_signals = circuit.current_witness_index;
+
         for opcode in &circuit.opcodes {
             match opcode {
                 Opcode::AssertZero(expr) => {
@@ -652,17 +654,71 @@ impl<F: AcirField + From<String> > Circuit<F> {
                                 });
                                 let wit = serde_json::json!({
                                     "coeff": (-F::one()).to_string(),
-                                    "witness1": witness.witness_index(),
-                                    "witness2": witness.witness_index(),
+                                    "witness": witness.witness_index(),
                                 });
                                 
                                 let constraint = serde_json::json!({
                                     "mul": [wit_squared], 
                                     "linear": [wit],
-                                    "constant": [],
+                                    "constant": "0",
                                 });
                                 println!("Adding constraint {}", constraint);
                                 constraints.push(constraint);
+                            } else{
+                                println!("Transforming black call {}", black_box_func_call);
+
+                                // current_witness_index contains the new index
+                                let mut constraint_lin = Vec::new();
+                                let mut coef = F::one();
+
+                                for i in 0..num_bits{
+                                    // adding new aux binary signal and constraint x^2 - x = 0
+                                    let new_s = n_signals;
+
+                                    let new_s_squared_c = serde_json::json!({
+                                        "coeff": "1",
+                                        "witness1": new_s,
+                                        "witness2": new_s,
+                                    });
+                                    let new_s_c = serde_json::json!({
+                                        "coeff": (-F::one()).to_string(),
+                                        "witness": new_s,
+                                    });
+                                
+                                    let constraint = serde_json::json!({
+                                       "mul": [new_s_squared_c], 
+                                        "linear": [new_s_c],
+                                        "constant": "0",
+                                    });
+                                    println!("Adding constraint {}", constraint);
+                                    constraints.push(constraint);
+
+
+                                    // adding s to the last linear constraint
+                                    let new_s_coef = serde_json::json!({
+                                        "coeff": coef.to_string(),
+                                        "witness": new_s,
+                                    });
+                                    constraint_lin.push(new_s_coef);
+
+                                    n_signals += 1;
+                                    coef = coef.mul(F::from("2".to_string()));
+                                }
+
+                                let wit = serde_json::json!({
+                                    "coeff": (-F::one()).to_string(),
+                                    "witness": witness.witness_index(),
+                                });
+                                constraint_lin.push(wit);
+
+                                
+                                let last_constraint = serde_json::json!({
+                                    "mul": [], 
+                                    "linear": constraint_lin,
+                                    "constant": "0",
+                                });
+                                println!("Adding constraint {}", last_constraint);
+                                constraints.push(last_constraint);
                             }
                         }
                         None =>{}
@@ -724,7 +780,7 @@ impl<F: AcirField + From<String> > Circuit<F> {
             "inputs": inputs,
             "outputs": outputs,
             "constraints": constraints,
-            "number_of_signals": circuit.current_witness_index
+            "number_of_signals": n_signals
         });
         Ok(json_output)
     }
