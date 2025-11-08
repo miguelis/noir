@@ -54,6 +54,67 @@ pub struct Program<F: AcirField> {
     pub unconstrained_functions: Vec<BrilligBytecode<F>>,
 }
 
+impl<F: AcirField + Serialize + From<String> > Program<F> {
+    pub fn write_program_to_json(&self, path: &str) -> std::io::Result<()> {
+        let mut file = File::create(path)?;
+
+        let mut functions_json = vec![];
+        
+        let minusone = F::modulus();
+        //let p = F::
+        let minusone = minusone.to_string();
+        let big_int = BigInt::from_str(minusone.as_str()).expect("Invalid number");
+
+        let prime : BigInt = big_int;
+
+        let mut num_functions = 0;
+        for function in &self.functions {
+            let function_json = Circuit::write_assert_zero_constraints(function)?;
+            functions_json.push(function_json);
+            num_functions += 1;
+        }
+
+        let json_output = serde_json::json!({
+            "functions": functions_json,
+            "prime": prime.to_string(),
+            "num_functions": num_functions,
+        });
+
+        writeln!(file, "{}", serde_json::to_string_pretty(&json_output)?)?;
+        file.flush()?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    pub fn transform_to_r1cs(&mut self) -> std::io::Result<()> {
+        let mut new_id = HashMap::new();
+        let mut new_witness_index = self.functions.get(0).unwrap().current_witness_index;
+        for function in self.functions.iter_mut() {
+            function.current_witness_index = new_witness_index;
+            new_witness_index = function.transform_to_r1cs(&mut new_id)?;
+        }
+        Ok(())
+    }
+
+    pub fn read_program_from_json(&mut self, path: &str) -> Result<(),std::io::Error> {
+        let file = File::open(path)?;
+        let json_output: Value = serde_json::from_reader(file)?;
+
+        let mut new_functions= Vec::new();
+        let mut i = 0;
+        for  circuit_json in json_output["functions"].as_array().unwrap() {
+
+            let mut circuit = self.functions.get(i).unwrap().clone();
+            circuit.read_assert_zero_constraints(circuit_json)?;
+            new_functions.push(circuit);
+            i += 1;
+        }
+        self.functions = new_functions;
+        Ok(())
+    }
+}
+
+
 /// Representation of a single ACIR circuit. The execution trace of this structure
 /// is dictated by the construction of a [crate::native_types::WitnessMap]
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default, Hash)]
@@ -571,20 +632,51 @@ impl<F: AcirField + From<String> > Circuit<F> {
                     }
         
                     constraints.push(constraint);
-                    }
+                }
                 Opcode::BlackBoxFuncCall(black_box_func_call) => {
                     let ipt = black_box_func_call.get_input_witnesses();
                     forbidden_signals.extend(ipt.iter().map(|w| w.witness_index()));
                     let opt = black_box_func_call.get_outputs_vec();
                     forbidden_signals.extend(opt.iter().map(|w| w.witness_index()));
+                    
+                    let check_range = black_box_func_call.get_range_info();
+                    match check_range{
+                        Some((witness, num_bits)) =>{
+                            if num_bits == 1{
+                                println!("Transforming black call {}", black_box_func_call);
+
+                                let wit_squared = serde_json::json!({
+                                    "coeff": "1",
+                                    "witness1": witness.witness_index(),
+                                    "witness2": witness.witness_index(),
+                                });
+                                let wit = serde_json::json!({
+                                    "coeff": (-F::one()).to_string(),
+                                    "witness1": witness.witness_index(),
+                                    "witness2": witness.witness_index(),
+                                });
+                                
+                                let constraint = serde_json::json!({
+                                    "mul": [wit_squared], 
+                                    "linear": [wit],
+                                    "constant": [],
+                                });
+                                println!("Adding constraint {}", constraint);
+                                constraints.push(constraint);
+                            }
+                        }
+                        None =>{}
+                    }
+                    
+                
                 },
-                Opcode::MemoryOp {  op, predicate, .. } => {
+                Opcode::MemoryOp {  op, .. } => {
                     for i in op.operation.get_witnesses() { forbidden_signals.insert(i.witness_index());}
                     for i in op.index.get_witnesses() { forbidden_signals.insert(i.witness_index());}
                     for i in op.value.get_witnesses() { forbidden_signals.insert(i.witness_index());}
-                    if predicate.is_some() {
-                        forbidden_signals.extend(predicate.as_ref().unwrap().get_witnesses().iter().map(|w| w.witness_index()));
-                    }
+                    //if predicate.is_some() {
+                    //    forbidden_signals.extend(predicate.as_ref().unwrap().get_witnesses().iter().map(|w| w.witness_index()));
+                    //}
                 },
                 Opcode::MemoryInit {  init, .. } => {
                     forbidden_signals.extend(init.iter().map(|w| w.witness_index()));

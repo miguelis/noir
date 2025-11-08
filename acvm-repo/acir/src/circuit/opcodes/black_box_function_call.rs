@@ -428,6 +428,19 @@ impl<F: Copy> BlackBoxFuncCall<F> {
         }
         result
     }
+
+    pub fn get_range_info(&self) -> Option<(Witness,u32)>{
+        match self{
+            BlackBoxFuncCall::RANGE { input, num_bits } =>{
+                if let FunctionInput::Witness(w) = input {
+                    Some((w.clone(), *num_bits))
+                } else{
+                    None
+                }
+            },
+            _ => None
+        }
+    }
 }
 
 impl<F: std::fmt::Display + Copy> std::fmt::Display for BlackBoxFuncCall<F> {
@@ -535,6 +548,7 @@ impl<F: std::fmt::Display + Copy> std::fmt::Display for BlackBoxFuncCall<F> {
 
         Ok(())
     }
+
 }
 
 fn slice_to_string<D: std::fmt::Display>(inputs: &[D]) -> String {
