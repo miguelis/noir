@@ -79,6 +79,8 @@ impl<F: AcirField + Serialize + From<String> > Program<F> {
             json_output = serde_json::json!({
                 "number_of_signals": first_function["number_of_signals"],
                 "constraints": first_function["constraints"],
+                "inputs": first_function["inputs"],
+                "outputs": first_function["outputs"],
                 "prime": prime.to_string(),
             });
         }
