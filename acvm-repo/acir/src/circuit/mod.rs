@@ -75,8 +75,10 @@ impl<F: AcirField + Serialize + From<String> > Program<F> {
         }
         let mut json_output;
         if num_functions == 1 {
+            let first_function = functions_json.into_iter().next().unwrap();
             json_output = serde_json::json!({
-                "constraints": functions_json.into_iter().next().unwrap(),
+                "number_of_signals": first_function["number_of_signals"],
+                "constraints": first_function["constraints"],
                 "prime": prime.to_string(),
             });
         }
