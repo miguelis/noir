@@ -81,7 +81,7 @@ impl<F: AcirField + Serialize + From<String> > Program<F> {
                 "constraints": first_function["constraints"],
                 "inputs": first_function["inputs"],
                 "outputs": first_function["outputs"],
-                "prime": prime.to_string(),
+                "prime": prime,
             });
         }
         else {
