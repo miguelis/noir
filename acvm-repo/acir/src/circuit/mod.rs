@@ -73,12 +73,20 @@ impl<F: AcirField + Serialize + From<String> > Program<F> {
             functions_json.push(function_json);
             num_functions += 1;
         }
-
-        let json_output = serde_json::json!({
+        let mut json_output;
+        if num_functions == 1 {
+            json_output = serde_json::json!({
+                "constraints": functions_json.into_iter().next().unwrap(),
+                "prime": prime.to_string(),
+            });
+        }
+        else {
+            json_output = serde_json::json!({
             "functions": functions_json,
             "prime": prime.to_string(),
             "num_functions": num_functions,
-        });
+            });
+        }
 
         writeln!(file, "{}", serde_json::to_string_pretty(&json_output)?)?;
         file.flush()?;
